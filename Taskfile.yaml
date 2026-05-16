@@ -1,0 +1,14 @@
+version: '3'
+
+includes:
+  k8s: ./k8s/K8sTasks.yaml
+
+tasks:
+  upgrade_kubernetes:
+    desc: Upgrade Kubernetes control plane to the given version
+    requires:
+      vars: [K8S_RELEASE]
+    summary: |
+      - It will upgrade the Kubernetes control plane to a new version.
+    cmds:
+      - task: k8s:upgrade_control_plane_components_on_all_controlplane_nodes

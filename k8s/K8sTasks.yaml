@@ -1,0 +1,165 @@
+version: '3'
+
+
+vars:
+  K8S_RELEASE: 1.35.5
+  TALOS_CONTROL_PLANE_NODE_NAMES:
+    sh: >
+        talosctl get members -o json | jq -s -r '.[] | select(.spec.machineType == "controlplane") | .spec.hostname' | sort | uniq
+  TALOS_WORKER_NODE_NAMES:
+    sh: >
+        talosctl get members -o json | jq -s -r '.[] | select(.spec.machineType == "worker") | .spec.hostname' | sort | uniq        
+
+includes:
+  talos: ./TalosHelperTasks.yaml
+  k8s: ./K8sHelperTasks.yaml
+
+tasks:
+  upgrade_control_plane_components_on_all_controlplane_nodes:
+    desc: Upgrade control plane components on all control plane nodes
+    requires:
+      vars: [TALOS_CONTROL_PLANE_NODE_NAMES, K8S_RELEASE]
+    summary: |
+      - It will upgrade the control plane components on all control plane nodes to a new version.
+    cmds:
+      - echo "Upgrading kubernetes control plane components on the following nodes:"
+      - >
+       echo "{{.TALOS_CONTROL_PLANE_NODE_NAMES}}"
+      - for: { var: TALOS_CONTROL_PLANE_NODE_NAMES, as: NODE }
+        task: upgrade_kube_apiserver
+        vars:
+          NODE: '{{.NODE}}'
+          K8S_RELEASE: '{{.K8S_RELEASE}}'
+      - for: { var: TALOS_CONTROL_PLANE_NODE_NAMES, as: NODE }
+        task: upgrade_kube_controller_manager
+        vars:
+          NODE: '{{.NODE}}'
+          K8S_RELEASE: '{{.K8S_RELEASE}}'
+      - for: { var: TALOS_CONTROL_PLANE_NODE_NAMES, as: NODE }
+        task: upgrade_kube_scheduler
+        vars:
+          NODE: '{{.NODE}}'
+          K8S_RELEASE: '{{.K8S_RELEASE}}'
+      - task: k8s:upgrade_kube_proxy_daemonset
+        vars:
+          K8S_RELEASE: '{{.K8S_RELEASE}}'
+      - task: sync_bootstrap_manifests
+      - echo "Kubernetes control plane components upgrade on control plane nodes is complete."
+      
+
+  upgrade_kube_apiserver:
+    requires:
+      vars: [NODE, K8S_RELEASE]
+    desc: Upgrade kube-apiserver on a single node to the given version of Kubernetes
+    summary: |
+      - It will upgrade the kube-apiserver Kubernetes component on a single node a new version.
+    cmds:
+      - echo "Upgrading kube-apiserver on {{.NODE}}."
+      - task: upgrade_k8s_node_component
+        vars:
+          K8S_COMPONENT: kube-apiserver
+          TALOS_COMPONENT: apiServer
+          NODE: '{{.NODE}}'
+      - >
+       echo "Kube-apiserver upgrade for {{.NODE}} is complete."
+
+  upgrade_kube_controller_manager:
+    requires:
+      vars: [NODE, K8S_RELEASE]
+    desc: Upgrade controller-manager on a single node to the given version of Kubernetes
+    summary: |
+      - It will upgrade the kube-controller-manager Kubernetes component on a single node a new version.
+    cmds:
+      - echo "Upgrading kube-controller-manager..."
+      - task: upgrade_k8s_node_component
+        vars:
+          K8S_COMPONENT: kube-controller-manager
+          TALOS_COMPONENT: controllerManager
+          NODE: '{{.NODE}}'
+      - >
+       echo "Kube-controller-manager upgrade for {{.NODE}} is complete."
+
+  upgrade_kube_scheduler:
+    requires:
+      vars: [NODE, K8S_RELEASE]
+    desc: Upgrade kube-scheduler on a single node to the given version of Kubernetes
+    summary: |
+      - It will upgrade the kube-scheduler Kubernetes component on a single node a new version.
+    cmds:
+      - echo "Upgrading kube-scheduler..."
+      - task: upgrade_k8s_node_component
+        vars:
+          K8S_COMPONENT: kube-scheduler
+          TALOS_COMPONENT: scheduler
+          NODE: '{{.NODE}}'
+      - >
+       echo "Kube-scheduler upgrade for {{.NODE}} is complete."
+
+  upgrade_kubelet:
+    requires:
+      vars: [NODE, K8S_RELEASE]
+    desc: Upgrade kubelet on a single node to the given version of Kubernetes
+    summary: |
+      - It will upgrade the kubelet Kubernetes component on a single node a new version.
+    prompt: This will upgrade kubelet on {{.NODE}} to Kubernetes version {{.K8S_RELEASE}}. Do you want to continue?
+    cmds:
+      - echo "Upgrading kubelet..."
+      - task: talos:upgrade_component_in_talos_node
+        vars:
+          TALOS_NODE_NAME: '{{.NODE}}'
+          TALOS_COMPONENT: 'kubelet'
+          K8S_COMPONENT: 'kubelet'
+          K8S_RELEASE: '{{.K8S_RELEASE}}'
+          REGISTRY: ghcr.io/siderolabs
+          TALOS_CONFIG_PATH: 'machine'
+          TALOS_NODE_IP:
+            sh: >
+              talosctl get members -o json | jq -s -r '.[] | select(.spec.hostname == "{{.NODE}}") | .spec.addresses[0]' | sort | uniq
+      - >
+       echo "Waiting for {{.NODE}} to be ready..."
+      - >
+       kubectl wait --for=condition=Ready node {{.NODE}} --timeout=300s
+      - >
+       echo "Kubelet upgrade for {{.NODE}} is complete."
+
+  sync_bootstrap_manifests:
+    desc: Sync bootstrap manifests from Talos to the Kubernetes cluster
+    summary: |
+      - It will sync the bootstrap manifests from Talos to the Kubernetes cluster.
+    cmds:
+      - task: talos:fetch_bootstrap_manifests
+      - defer: rm manifests.yaml
+      - task: k8s:diff_bootstrap_manifests
+        ignore_error: true
+      - task: k8s:apply_bootstrap_manifests
+
+  upgrade_k8s_node_component:
+    internal: true
+    desc: Upgrade the Kubernetes component to a new version
+    requires:
+      vars: [NODE, K8S_RELEASE, TALOS_COMPONENT, K8S_COMPONENT]
+    summary: |
+      - It will upgrade the Kubernetes component on the given node to a new version.
+    prompt: This will upgrade {{.K8S_COMPONENT}} on {{.NODE}} to Kubernetes version {{.K8S_RELEASE}}. Do you want to continue?
+    cmds:
+      - task: talos:upgrade_component_in_talos_node
+        vars:
+          TALOS_NODE_IP: '{{.TALOS_NODE_IP}}'
+          TALOS_COMPONENT: '{{.TALOS_COMPONENT}}'
+          K8S_COMPONENT: '{{.K8S_COMPONENT}}'
+          K8S_RELEASE: '{{.K8S_RELEASE}}'
+      - task: k8s:wait_for_k8s_config_version_match
+        vars:
+          K8S_COMPONENT: '{{.K8S_COMPONENT}}'
+          K8S_NODE_NAME: '{{.NODE}}'
+          TALOS_CONFIG_VERSION:
+            sh: >
+              talosctl -n {{.TALOS_NODE_IP}} get {{.TALOS_COMPONENT}}config -o jsonpath='{.metadata.version}'
+      - task: k8s:wait_for_component_pod_ready
+        vars:
+          K8S_COMPONENT: '{{.K8S_COMPONENT}}'
+          K8S_NODE_NAME: '{{.NODE}}'
+    vars:
+      TALOS_NODE_IP:
+        sh: >
+         talosctl get members -o json | jq -s -r '.[] | select(.spec.hostname == "{{.NODE}}") | .spec.addresses[0]' | sort | uniq

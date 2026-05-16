@@ -1,0 +1,71 @@
+version: '3'
+
+
+tasks:
+  wait_for_k8s_config_version_match:
+    internal: true
+    desc: Wait for the desired configuration to be propagated to the Kubernetes component
+    requires:
+      vars: [TALOS_CONFIG_VERSION, K8S_COMPONENT, K8S_NODE_NAME]
+    summary: |
+      - It will wait for the desired configuration to be propagated from Talos to the Kubernetes component on the given node.
+    cmds:
+      - >
+       echo "Waiting for Kubernetes config version to match Talos config version for {{.K8S_COMPONENT}} on node {{.K8S_NODE_NAME}}."
+      - >
+       echo "Current Kubernetes config version: $({{.KUBERNETES_CONFIG_VERSION_COMMAND}}), desired version: {{.TALOS_CONFIG_VERSION}}"
+      - >
+       until [ "$({{.KUBERNETES_CONFIG_VERSION_COMMAND}})" -eq "{{.TALOS_CONFIG_VERSION}}" ]; do echo "Waiting for config to propagate. Current kubernetes config version: $({{.KUBERNETES_CONFIG_VERSION_COMMAND}}), desired version: {{.TALOS_CONFIG_VERSION}}"; sleep 5; done
+      - >
+       echo "Config propagated successfully"
+    vars:
+      KUBERNETES_CONFIG_VERSION_COMMAND: >
+          kubectl get pod -n kube-system -l k8s-app={{.K8S_COMPONENT}} --field-selector spec.nodeName={{.K8S_NODE_NAME}} -o jsonpath='{.items[0].metadata.annotations.talos\.dev/config\-version}'
+  
+  wait_for_component_pod_ready:
+    internal: true
+    desc: Wait for the Kubernetes component pod to be ready
+    requires:
+      vars: [K8S_COMPONENT, K8S_NODE_NAME]
+    summary: |
+      - It will wait for the Kubernetes component pod to be ready.
+    cmds:
+      - >
+       echo "Waiting for {{.K8S_COMPONENT}} pod to be ready..."
+      - >
+       kubectl wait --for=condition=Ready -n kube-system -l k8s-app={{.K8S_COMPONENT}} --field-selector spec.nodeName={{.K8S_NODE_NAME}} --timeout=600s pod
+      - >
+       echo "{{.K8S_COMPONENT}} pod is ready."
+  
+  upgrade_kube_proxy_daemonset:
+    desc: Upgrade kube-proxy DaemonSet to the given version of Kubernetes
+    requires:
+      vars: [K8S_RELEASE]
+    summary: |
+      - It will upgrade the kube-proxy DaemonSet to the given version of Kubernetes.
+    cmds:
+      - echo "Upgrading kube-proxy DaemonSet..."
+      - >
+       kubectl set image daemonset/kube-proxy -n kube-system kube-proxy=registry.k8s.io/kube-proxy:v{{.K8S_RELEASE}}
+      - >
+       kubectl rollout status daemonset -n kube-system kube-proxy --timeout 600s
+  
+  diff_bootstrap_manifests:
+    internal: true
+    desc: Diff bootstrap manifests from Talos to the Kubernetes cluster
+    summary: |
+      - It will diff the bootstrap manifests from Talos to the Kubernetes cluster.
+    cmds:
+      - echo "Comparing bootstrap manifests between Talos and Kubernetes cluster"
+      - cmd: kubectl diff -f manifests.yaml
+  
+  apply_bootstrap_manifests:
+    internal: true
+    desc: Apply bootstrap manifests from Talos to the Kubernetes cluster
+    summary: |
+      - It will apply the bootstrap manifests from Talos to the Kubernetes cluster.
+    prompt: Do you want to apply the bootstrap manifests?
+    cmds:
+      - echo "Applying bootstrap manifests to kubernetes cluster"
+      - >
+       kubectl apply -f manifests.yaml

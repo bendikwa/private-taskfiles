@@ -1,0 +1,52 @@
+version: '3'
+
+
+tasks:
+  upgrade_component_in_talos_node:
+    internal: true
+    desc: Upgrade the Kubernetes component to a new version
+    requires:
+      vars: [TALOS_NODE_IP, TALOS_COMPONENT, K8S_COMPONENT, K8S_RELEASE]
+    summary: |
+      - It will upgrade the Kubernetes component image tag on the given Talos node to a new version.
+    cmds:
+      - echo "Updating Talos machine configuration for {{.TALOS_NODE_IP}} to upgrade {{.K8S_COMPONENT}} to version {{.K8S_RELEASE}}."
+      - task: make_patchfile
+        vars:
+          TALOS_COMPONENT: '{{.TALOS_COMPONENT}}'
+          K8S_COMPONENT: '{{.K8S_COMPONENT}}'
+          K8S_RELEASE: '{{.K8S_RELEASE}}'
+          REGISTRY: '{{.REGISTRY| default "registry.k8s.io"}}'
+          TALOS_CONFIG_PATH: '{{.TALOS_CONFIG_PATH| default "cluster"}}'
+      - defer: rm patch.yaml
+      - >  # Apply the patch to the Talos machine configuration
+       talosctl -n {{.TALOS_NODE_IP}} patch mc --mode=no-reboot -p @patch.yaml
+      - >
+        echo "Machine config upgrade on {{.TALOS_NODE_IP}} for {{.K8S_COMPONENT}} is applied."
+  
+  make_patchfile:
+    internal: true
+    desc: Create a patch file for Talos machine configuration
+    requires:
+      vars: [TALOS_COMPONENT, K8S_COMPONENT, K8S_RELEASE, REGISTRY]
+    summary: |
+      - It will create a patch file for the Talos machine configuration.
+    cmds:
+      - |
+        cat > "patch.yaml" <<EOT
+        {{.TALOS_CONFIG_PATH}}:
+          {{.TALOS_COMPONENT}}:
+            image: {{.REGISTRY}}/{{.K8S_COMPONENT}}:v{{.K8S_RELEASE}}
+        EOT
+  
+  fetch_bootstrap_manifests:
+    internal: true
+    desc: Fetches bootstrap manifests from Talos
+    summary: |
+      - It will fetch the bootstrap manifests from Talos and format them for kubectl.
+        Depending on https://github.com/mikefarah/yq
+        Tested with yq version v4.53.2
+    cmds:
+      - echo "Fetching bootstrap manifests from Talos."
+      - >
+       talosctl get manifests -o yaml | yq eval-all '.spec | .[] | splitDoc | del(select(.metadata.name == "kube-proxy") | .spec.selector)' - > manifests.yaml
