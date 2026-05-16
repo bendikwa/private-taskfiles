@@ -6,11 +6,11 @@ tasks:
     internal: true
     desc: Upgrade the Kubernetes component to a new version
     requires:
-      vars: [TALOS_NODE_IP, TALOS_COMPONENT, K8S_COMPONENT, K8S_RELEASE]
+      vars: [TALOS_NODE_NAME, TALOS_NODE_IP, TALOS_COMPONENT, K8S_COMPONENT, K8S_RELEASE]
     summary: |
       - It will upgrade the Kubernetes component image tag on the given Talos node to a new version.
     cmds:
-      - echo "Updating Talos machine configuration for {{.TALOS_NODE_IP}} to upgrade {{.K8S_COMPONENT}} to version {{.K8S_RELEASE}}."
+      - echo "Updating Talos machine configuration for {{.TALOS_NODE_NAME}} to upgrade {{.K8S_COMPONENT}} to version {{.K8S_RELEASE}}."
       - task: make_patchfile
         vars:
           TALOS_COMPONENT: '{{.TALOS_COMPONENT}}'

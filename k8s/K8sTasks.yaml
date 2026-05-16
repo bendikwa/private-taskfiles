@@ -45,7 +45,31 @@ tasks:
           K8S_RELEASE: '{{.K8S_RELEASE}}'
       - task: sync_bootstrap_manifests
       - echo "Kubernetes control plane components upgrade on control plane nodes is complete."
-      
+
+  upgrade_kubelet_on_all_nodes:
+    desc: Upgrade kubelet on all nodes
+    requires:
+      vars: [TALOS_CONTROL_PLANE_NODE_NAMES, TALOS_WORKER_NODE_NAMES, K8S_RELEASE]
+    summary: |
+      - It will upgrade kubelet on all nodes to a new version.
+    cmds:
+      - echo "Upgrading kubelet on the following control plane nodes:"
+      - >
+       echo "{{.TALOS_CONTROL_PLANE_NODE_NAMES}}"
+      - for: { var: TALOS_CONTROL_PLANE_NODE_NAMES, as: NODE }
+        task: upgrade_kubelet
+        vars:
+          NODE: '{{.NODE}}'
+          K8S_RELEASE: '{{.K8S_RELEASE}}'
+      - echo "Upgrading kubelet on the following worker nodes:"
+      - >
+       echo "{{.TALOS_WORKER_NODE_NAMES}}"
+      - for: { var: TALOS_WORKER_NODE_NAMES, as: NODE }
+        task: upgrade_kubelet
+        vars:
+          NODE: '{{.NODE}}'
+          K8S_RELEASE: '{{.K8S_RELEASE}}'
+      - echo "Kubelet upgrade on all nodes is complete."
 
   upgrade_kube_apiserver:
     requires:
@@ -94,6 +118,22 @@ tasks:
           NODE: '{{.NODE}}'
       - >
        echo "Kube-scheduler upgrade for {{.NODE}} is complete."
+
+  upgrade_kube_proxy:
+    requires:
+      vars: [NODE, K8S_RELEASE]
+    desc: Upgrade kube-proxy on a single node to the given version of Kubernetes
+    summary: |
+      - It will upgrade the kube-proxy Kubernetes component on a single node a new version.
+    cmds:
+      - echo "Upgrading kube-proxy..."
+      - task: upgrade_k8s_node_component
+        vars:
+          K8S_COMPONENT: kube-proxy
+          TALOS_COMPONENT: proxy
+          NODE: '{{.NODE}}'
+      - >
+       echo "Kube-proxy upgrade for {{.NODE}} is complete."
 
   upgrade_kubelet:
     requires:
@@ -144,6 +184,7 @@ tasks:
     cmds:
       - task: talos:upgrade_component_in_talos_node
         vars:
+          TALOS_NODE_NAME: '{{.NODE}}'
           TALOS_NODE_IP: '{{.TALOS_NODE_IP}}'
           TALOS_COMPONENT: '{{.TALOS_COMPONENT}}'
           K8S_COMPONENT: '{{.K8S_COMPONENT}}'
