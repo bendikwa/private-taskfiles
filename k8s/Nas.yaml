@@ -1,0 +1,79 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  nas:
+    desc: Bootstrap NAS to join the cluster
+    summary: |
+      - See https://github.com/siderolabs/talos/issues/3990 for more info.
+      - ensure you do the configuration that's in kubernetes/bootstrap/talos/patches/global manually!
+        especially the machine-network and machine-files ones!
+
+    prompt: Wipe existing K8S install from NAS and re-initialize? Will also cause a reboot!
+    cmds:
+      # remove existing
+      - cmd: >
+          {{.SSH}} 'systemctl is-active kubelet.service containerd.service 1>/dev/null && sudo systemctl disable kubelet.service containerd.service && sudo reboot && sleep 10'
+        ignore_error: true
+      - until {{.SSH}} -o ConnectTimeout=1 'exit 0'; do sleep 5; done
+      - >
+        {{.SSH}} 'sudo find /var/lib/containerd/io.containerd.snapshotter.v1.btrfs/snapshots/ -maxdepth 1 -type d -exec btrfs subvolume delete {} \; ; sudo rm -rf /var/local/openebs /etc/kubernetes /etc/cni /var/lib/cni /opt/cni /var/lib/containerd /var/lib/kubelet'
+      # copy files from talos cluster
+      - >
+        {{.TALOS}} cat /etc/kubernetes/kubeconfig-kubelet > "$TMPDIR/kubelet.conf"
+      - >
+        {{.TALOS}} cat /etc/kubernetes/bootstrap-kubeconfig > "$TMPDIR/bootstrap-kubelet.conf"
+      - >
+        {{.TALOS}} cat /etc/kubernetes/pki/ca.crt > $TMPDIR/ca.crt
+      - >
+        sed -i "/server:/ s|:.*|: https://k8s-master.bendikwa.com:6443|g" "$TMPDIR/kubelet.conf" "$TMPDIR/bootstrap-kubelet.conf"
+      - |
+        cat > "$TMPDIR/var-lib-kubelet-config.yaml" <<EOT
+        kind: KubeletConfiguration
+        apiVersion: kubelet.config.k8s.io/v1beta1
+        authentication:
+          anonymous:
+            enabled: false
+          webhook:
+            enabled: true
+          x509:
+            clientCAFile: /etc/kubernetes/pki/ca.crt
+        authorization:
+          mode: Webhook
+        clusterDomain: "$CLUSTER_DOMAIN"
+        clusterDNS: $CLUSTER_DNS
+        runtimeRequestTimeout: "0s"
+        cgroupDriver: systemd
+        containerRuntimeEndpoint: unix:/$SOCKET_PATH
+        EOT
+      - |
+        cat > "$TMPDIR/kubelet.service.override.conf" <<EOT
+        [Service]
+        Environment="KUBELET_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf --config=/var/lib/kubelet/config.yaml --fail-swap-on=false"
+        EOT
+      - scp -r "$TMPDIR" "bendikwa@nas.bendikwa.com:$TMPDIR"
+      - >
+        {{.SSH}} "sudo mkdir -p /etc/kubernetes/pki /var/lib/kubelet /etc/systemd/system/kubelet.service.d/ &&
+          sudo mv $TMPDIR/kubelet.conf /etc/kubernetes/kubelet.conf &&
+          sudo mv $TMPDIR/bootstrap-kubelet.conf /etc/kubernetes/bootstrap-kubelet.conf &&
+          sudo mv $TMPDIR/ca.crt /etc/kubernetes/pki/ca.crt &&
+          sudo mv $TMPDIR/var-lib-kubelet-config.yaml /var/lib/kubelet/config.yaml &&
+          sudo mv $TMPDIR/kubelet.service.override.conf /etc/systemd/system/kubelet.service.d/override.conf &&
+          sudo systemctl daemon-reload &&
+          sudo systemctl enable --now containerd.service kubelet.service"
+    vars:
+      SSH: ssh -t bendikwa@nas.bendikwa.com
+      TALOS: talosctl -n 10.10.1.23
+    env:
+      TMPDIR:
+        sh: mktemp -d
+      CLUSTER_DOMAIN:
+        sh: talosctl -n "10.10.1.23" get kubeletconfig -o jsonpath="{.spec.clusterDomain}"
+      CLUSTER_DNS:
+        sh: talosctl -n "10.10.1.23" get kubeletconfig -o jsonpath="{.spec.clusterDNS}"
+      SOCKET_PATH: /var/run/containerd/containerd.sock
+    preconditions:
+      - talosctl --nodes 10.10.1.23 get machineconfig
+      - ssh bendikwa@nas.bendikwa.com -o ConnectTimeout=1 'exit 0'
+      - which kubectl talosctl ssh

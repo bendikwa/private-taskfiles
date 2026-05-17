@@ -43,6 +43,7 @@ tasks:
       vars: [K8S_RELEASE]
     summary: |
       - It will upgrade the kube-proxy DaemonSet to the given version of Kubernetes.
+    prompt: This will upgrade kube-proxy to Kubernetes version {{.K8S_RELEASE}}. Do you want to continue?
     cmds:
       - echo "Upgrading kube-proxy DaemonSet..."
       - >
